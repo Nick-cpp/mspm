@@ -427,7 +427,7 @@ process_search() {
                 local pkg_name
                 pkg_name=$(basename "$pkg_dir")
 
-                if [ -z "$query" ] || [[ "$pkg_name" =~ $(echo "$query" | tr '[:upper:]' '[:lower:]') ]]; then
+                if [ -z "$query" ] || [[ "$pkg_name" == *"$query"* ]]; then
                     local ver
                     ver=$(get_repo_version "$pkg_name" "$repo")
                     local installed_mark=""
