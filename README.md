@@ -104,7 +104,7 @@ Adding `testing` - **unstable** repository to mspm:
 testing=wget -q "https://github.com/Nick-cpp/mspm-test-repo/archive/refs/tags/testing.tar.gz" -O - | tar -xz --strip-components=1
 ```
 
-**DO NOT USE TESTING REPOSITORY PACKAGES MIGHT NOT BUILD CORRECTLY FROM THERE! THIS REPOSITORY IS ONLY FOR TESTING!**
+**Testing repository is an unstable mspm repository, packages from it may not be built, some dependencies for packages in the testing repository may be missing, if you use the testing repository and notice errors - report it to my email - mikola@atomicmail.io**
 
 # Creating a Repository for mspm
 
