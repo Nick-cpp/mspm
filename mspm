@@ -92,6 +92,122 @@ get_repo_version() {
     echo "$version"
 }
 
+get_package_deps() {
+    local pkg="$1"
+    local repo="$2"
+    local script="${REPOS_BASE_DIR}/${repo}/${pkg}/mspm-build"
+    if [ -f "$script" ]; then
+        (
+            unset depends
+            source "$script" &>/dev/null
+            if declare -p depends &>/dev/null 2>&1; then
+                printf "%s\n" "${depends[@]}"
+            fi
+        )
+    fi
+}
+
+resolve_pkg_recursive() {
+    local target="$1"
+    local is_top_level="${2:-0}"
+
+    local pkg repo
+    if [[ "$target" == *"::"* ]]; then
+        pkg="${target%%::*}"
+        local req_repo="${target##*::}"
+        repo=$(find_package "${pkg}::${req_repo}")
+    else
+        pkg="$target"
+        repo=$(find_package "$pkg")
+    fi
+
+    if [ -z "$repo" ]; then
+        echo -e "${CLR_RED}Error:${CLR_RESET} package not found in repository: ${CLR_CYAN}${target}${CLR_RESET}" >&2
+        return 1
+    fi
+
+    if [ "${in_stack["$pkg"]}" = "1" ]; then
+        echo -e "${CLR_RED}Error:${CLR_RESET} circular dependency detected involving ${CLR_CYAN}${pkg}${CLR_RESET}" >&2
+        return 1
+    fi
+
+    if [ "${in_queue["$pkg"]}" = "1" ]; then
+        return 0
+    fi
+
+    if [ "$is_top_level" -ne 1 ] && ( is_package_installed "$pkg" || [ -n "$(get_installed_package_entry "$pkg")" ] ); then
+        return 0
+    fi
+
+    in_stack["$pkg"]=1
+
+    local dep_raw
+    while IFS= read -r dep_raw || [ -n "$dep_raw" ]; do
+        [ -z "$dep_raw" ] && continue
+
+        local satisfied=0
+        local alt_deps
+        IFS='|' read -ra alt_deps <<< "${dep_raw//||/|}"
+
+        for alt in "${alt_deps[@]}"; do
+            alt=$(echo "$alt" | xargs)
+            [ -z "$alt" ] && continue
+
+            local alt_pkg="${alt%%::*}"
+            if is_package_installed "$alt_pkg" || [ -n "$(get_installed_package_entry "$alt_pkg")" ] || [ "${in_queue["$alt_pkg"]}" = "1" ]; then
+                satisfied=1
+                break
+            fi
+        done
+
+        if [ $satisfied -eq 0 ]; then
+            local available_alts=()
+            for alt in "${alt_deps[@]}"; do
+                alt=$(echo "$alt" | xargs)
+                [ -z "$alt" ] && continue
+                if [ -n "$(find_package "$alt")" ]; then
+                    available_alts+=("$alt")
+                fi
+            done
+
+            local dep_to_install=""
+            if [ ${#available_alts[@]} -eq 0 ]; then
+                echo -e "${CLR_RED}Error:${CLR_RESET} missing dependency '${CLR_CYAN}${dep_raw}${CLR_RESET}' required by '${CLR_CYAN}${pkg}${CLR_RESET}' (none of the alternatives found in repositories)." >&2
+                in_stack["$pkg"]=0
+                return 1
+            elif [ ${#available_alts[@]} -eq 1 ]; then
+                dep_to_install="${available_alts[0]}"
+            else
+                echo -e "${CLR_YELLOW}Multiple providers available for dependency required by ${CLR_CYAN}${pkg}${CLR_RESET}:" >&2
+                for idx in "${!available_alts[@]}"; do
+                    echo -e "  $((idx+1))) ${CLR_CYAN}${available_alts[$idx]}${CLR_RESET}" >&2
+                done
+                local choice
+                while true; do
+                    echo -n "Select a provider [1-${#available_alts[@]}]: " >&2
+                    read -r choice < /dev/tty 2>/dev/null || read -r choice
+                    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#available_alts[@]}" ]; then
+                        dep_to_install="${available_alts[$((choice-1))]}"
+                        break
+                    else
+                        echo -e "${CLR_RED}Invalid choice, try again.${CLR_RESET}" >&2
+                    fi
+                done
+            fi
+
+            if ! resolve_pkg_recursive "$dep_to_install" 0; then
+                in_stack["$pkg"]=0
+                return 1
+            fi
+        fi
+    done < <(get_package_deps "$pkg" "$repo")
+
+    in_stack["$pkg"]=0
+    in_queue["$pkg"]=1
+    resolved_list+=("${pkg}::${repo}")
+    return 0
+}
+
 check_dependencies() {
     local missing=()
 
@@ -199,29 +315,24 @@ sync_repo() {
 
 process_install_list() {
     local targets=("$@")
-    local resolved=()
+    local resolved_list=()
+    local -A in_stack=()
+    local -A in_queue=()
 
     for item in "${targets[@]}"; do
-        if [[ "$item" == *"::"* ]]; then
-            pkg="${item%%::*}"
-            req_repo="${item##*::}"
-            found_repo=$(find_package "${pkg}::${req_repo}")
-        else
-            pkg="$item"
-            found_repo=$(find_package "$pkg")
-        fi
-
-        if [ -n "$found_repo" ]; then
-            resolved+=("${pkg}::${found_repo}")
-        else
-            echo -e "${CLR_RED}Package not found in repository: ${CLR_CYAN}$item${CLR_RESET}"
+        if ! resolve_pkg_recursive "$item" 1; then
             exit 1
         fi
     done
 
+    if [ ${#resolved_list[@]} -eq 0 ]; then
+        echo -e "${CLR_GREEN}All requested packages (and their dependencies) are already installed.${CLR_RESET}"
+        return 0
+    fi
+
     if [ "${SKIP_CONFIRM}" != "1" ]; then
         echo -e "Packages to install:"
-        for spec in "${resolved[@]}"; do
+        for spec in "${resolved_list[@]}"; do
             pkg="${spec%%::*}"
             repo="${spec##*::}"
             ver=$(get_repo_version "$pkg" "$repo")
@@ -238,7 +349,7 @@ process_install_list() {
         fi
     fi
 
-    for spec in "${resolved[@]}"; do
+    for spec in "${resolved_list[@]}"; do
         pkg="${spec%%::*}"
         repo="${spec##*::}"
 
