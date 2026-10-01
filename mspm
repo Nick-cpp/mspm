@@ -497,10 +497,42 @@ process_update() {
         return 0
     fi
 
+    local resolved_list=()
+    local -A in_stack=()
+    local -A in_queue=()
+
+    for (( i=0; i<${#updates_to_pkg[@]}; i++ )); do
+        local pkg="${updates_to_pkg[$i]}"
+        local repo="${updates_to_repo[$i]}"
+
+        if ! resolve_pkg_recursive "${pkg}::${repo}" 1; then
+            exit 1
+        fi
+    done
+
     echo -e "Available updates:"
     for (( i=0; i<${#updates_to_pkg[@]}; i++ )); do
         echo -e "  - ${CLR_CYAN}${updates_to_pkg[$i]}${CLR_RESET}${CLR_YELLOW}::${updates_to_repo[$i]}${CLR_RESET} [${CLR_RED}${updates_old_ver[$i]}${CLR_RESET} -> ${CLR_GREEN}${updates_new_ver[$i]}${CLR_RESET}]"
     done
+
+    local new_deps=()
+    for spec in "${resolved_list[@]}"; do
+        local pkg="${spec%%::*}"
+        if ! is_package_installed "$pkg" && [ -z "$(get_installed_package_entry "$pkg")" ]; then
+            new_deps+=("$spec")
+        fi
+    done
+
+    if [ ${#new_deps[@]} -gt 0 ]; then
+        echo -e "\nNew dependencies to install:"
+        for spec in "${new_deps[@]}"; do
+            local pkg="${spec%%::*}"
+            local repo="${spec##*::}"
+            local ver
+            ver=$(get_repo_version "$pkg" "$repo")
+            echo -e "  - ${CLR_CYAN}${pkg}${CLR_RESET}${CLR_YELLOW}::${repo}${CLR_RESET} ${CLR_BLUE}(version: ${ver:-unknown})${CLR_RESET}"
+        done
+    fi
     echo
 
     read -p "$(echo -e "Proceed with update? (${CLR_GREEN}y${CLR_RESET}/${CLR_RED}n${CLR_RESET}): ")" -r REPLY
@@ -512,13 +544,7 @@ process_update() {
     fi
 
     SKIP_CONFIRM=1
-    for (( i=0; i<${#updates_to_pkg[@]}; i++ )); do
-        local pkg="${updates_to_pkg[$i]}"
-        local repo="${updates_to_repo[$i]}"
-
-        echo -e "Updating ${CLR_CYAN}${pkg}${CLR_RESET}${CLR_YELLOW}::${repo}${CLR_RESET}..."
-        process_install_list "${pkg}::${repo}"
-    done
+    process_install_list "${resolved_list[@]}"
     unset SKIP_CONFIRM
 }
 
