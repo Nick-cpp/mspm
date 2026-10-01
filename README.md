@@ -106,6 +106,8 @@ testing=wget -q "https://github.com/Nick-cpp/mspm-test-repo/archive/refs/tags/te
 
 **Testing repository is an unstable mspm repository, packages from it may not be built, some dependencies for packages in the testing repository may be missing, if you use the testing repository and notice errors - report it to my email - mikola@atomicmail.io**
 
+**Packages from the testing repository after testing go to the master repository, but even so, some dependencies may be missing, you can also report errors from the master repository to my email - mikola@atomicmail.io**
+
 # Creating a Repository for mspm
 
 A guide on how to structure, create, and maintain your own package repository for **mspm**.
